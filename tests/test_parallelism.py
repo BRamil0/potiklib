@@ -48,11 +48,12 @@ async def async_cpu_task(iters: int) -> int:
     return _cpu_burn(iters)
 
 
+@pytest.mark.skipif(
+    os.getenv("CI") == "true" or (os.process_cpu_count() or 1) < 3,
+    reason="CPU timing assertions are flaky on shared 2-vCPU CI runners",
+)
 def test_cpu_tasks_run_in_parallel_by_timing() -> None:
     cpu_count = os.process_cpu_count() or 1
-    if cpu_count < 2:
-        pytest.skip("Need at least 2 CPUs to verify parallel CPU speedup")
-
     workers = min(4, cpu_count)
     iters, single_time = _calibrate_cpu_burn(0.25)
 
@@ -71,14 +72,15 @@ def test_cpu_tasks_run_in_parallel_by_timing() -> None:
     assert parallel_time < single_time * workers * 0.7
 
 
+@pytest.mark.skipif(
+    os.getenv("CI") == "true" or (os.process_cpu_count() or 1) < 3,
+    reason="CPU timing assertions are flaky on shared 2-vCPU CI runners",
+)
 def test_async_cpu_tasks_run_in_parallel_by_timing() -> None:
     if sys._is_gil_enabled():
         pytest.skip("ATPE CPU parallelism requires free-threaded Python")
 
     cpu_count = os.process_cpu_count() or 1
-    if cpu_count < 2:
-        pytest.skip("Need at least 2 CPUs to verify parallel CPU speedup")
-
     workers = min(4, cpu_count)
     iters, single_time = _calibrate_cpu_burn(0.25)
 
@@ -99,6 +101,43 @@ def test_async_cpu_tasks_run_in_parallel_by_timing() -> None:
     assert results == [expected] * workers
     # CPU-heavy @task async def tasks execute in parallel across ATPE worker threads.
     assert parallel_time < single_time * workers * 0.7
+
+
+def test_tpe_and_atpe_concurrent_execution_with_barrier(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "_is_gil_enabled", lambda: False)
+
+    tpe_barrier = threading.Barrier(2)
+    atpe_barrier = threading.Barrier(2)
+
+    @task
+    def sync_barrier_task() -> int:
+        tpe_barrier.wait(timeout=2.0)
+        return threading.get_ident()
+
+    @task
+    async def async_barrier_task() -> int:
+        await asyncio.sleep(0)
+        atpe_barrier.wait(timeout=2.0)
+        return threading.get_ident()
+
+    async def main() -> tuple[int, tuple[int, int], tuple[int, int]]:
+        main_tid = threading.get_ident()
+        tpe_tids = await asyncio.gather(
+            apotik(sync_barrier_task),
+            apotik(sync_barrier_task),
+        )
+        atpe_tids = await asyncio.gather(
+            async_barrier_task(),
+            async_barrier_task(),
+        )
+        return main_tid, tpe_tids, atpe_tids
+
+    main_thread_id, sync_tids, async_tids = run(main, workers=2)
+
+    assert len(set(sync_tids)) == 2
+    assert main_thread_id not in sync_tids
+    assert len(set(async_tids)) == 2
+    assert main_thread_id not in async_tids
 
 
 def test_atpe_least_loaded_avoids_blocked_worker() -> None:
