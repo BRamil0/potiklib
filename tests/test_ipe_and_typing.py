@@ -2,6 +2,7 @@ import asyncio
 import concurrent.interpreters
 import functools
 import sys
+import unittest.mock
 
 import pytest
 
@@ -46,7 +47,7 @@ class CustomAwaitable:
         return _inner().__await__()
 
 
-def test_ipe_provider_with_wrapped_task_function(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ipe_provider_with_wrapped_task_function() -> None:
     main_interp_id = concurrent.interpreters.get_current().id
     provider = IPEProvider(workers=2)
     submitted_targets: list[object] = []
@@ -56,31 +57,31 @@ def test_ipe_provider_with_wrapped_task_function(monkeypatch: pytest.MonkeyPatch
         submitted_targets.append(fn)
         return orig_submit(fn, *args, **kwargs)
 
-    monkeypatch.setattr(provider._executor, "submit", spy_submit)
     try:
-        res, interp_id = provider.execute(ipe_square, 9)
-        assert res == 81
-        assert interp_id != main_interp_id
-        assert submitted_targets[-1] is getattr(ipe_square, "__wrapped__")
+        with unittest.mock.patch.object(provider._executor, "submit", side_effect=spy_submit):
+            res, interp_id = provider.execute(ipe_square, 9)
+            assert res == 81
+            assert interp_id != main_interp_id
+            assert submitted_targets[-1] is getattr(ipe_square, "__wrapped__")
 
-        with pytest.raises(ValueError, match="ipe-error"):
-            provider.execute(ipe_fail, "ipe-error")
+            with pytest.raises(ValueError, match="ipe-error"):
+                provider.execute(ipe_fail, "ipe-error")
 
-        # User decorators without _potik_task are not silently unwrapped.
-        try:
-            provider.execute(user_decorated, 1)
-        except concurrent.interpreters.NotShareableError:
-            pass
-        assert submitted_targets[-1] is user_decorated
+            # User decorators without _potik_task are not silently unwrapped.
+            try:
+                provider.execute(user_decorated, 1)
+            except concurrent.interpreters.NotShareableError:
+                pass
+            assert submitted_targets[-1] is user_decorated
 
-        # A closure is never cross-interpreter shareable regardless of PYTHONPATH.
-        offset = 1
+            # A closure is never cross-interpreter shareable regardless of PYTHONPATH.
+            offset = 1
 
-        def local_closure(x: int) -> int:
-            return x + offset
+            def local_closure(x: int) -> int:
+                return x + offset
 
-        with pytest.raises(concurrent.interpreters.NotShareableError):
-            provider.execute(local_closure, 1)
+            with pytest.raises(concurrent.interpreters.NotShareableError):
+                provider.execute(local_closure, 1)
     finally:
         provider.shutdown(wait=True)
 
@@ -102,11 +103,12 @@ def test_gil_enabled_routes_sync_tasks_to_ipe(monkeypatch: pytest.MonkeyPatch) -
     assert id3 != main_interp_id
 
 
-def test_typing_overloads_and_inference() -> None:
-    @task
-    def typed_sync(a: int, b: str = "x") -> tuple[int, str]:
-        return a, b
+@task
+def typed_sync(a: int, b: str) -> tuple[int, str]:
+    return a, b
 
+
+def test_typing_overloads_and_inference() -> None:
     @task
     async def typed_async(a: int) -> str:
         await asyncio.sleep(0)
@@ -115,7 +117,7 @@ def test_typing_overloads_and_inference() -> None:
     async def main() -> int:
         s1: tuple[int, str] = typed_sync(1, b="y")
         s2: tuple[int, str] = potik(typed_sync, 2, "z")
-        s3: tuple[int, str] = await apotik(typed_sync, 3)
+        s3: tuple[int, str] = await apotik(typed_sync, 3, b="x")
 
         a1: str = await typed_async(4)
         a2: str = await apotik(typed_async, 5)

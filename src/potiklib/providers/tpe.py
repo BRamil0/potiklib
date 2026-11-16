@@ -3,7 +3,7 @@ import contextvars
 import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any, cast
+from typing import Any
 
 
 class TPEProvider:
@@ -23,14 +23,14 @@ class TPEProvider:
             thread_name_prefix="potik-tpe",
         )
 
-    def _run_in_worker(
+    def _run_in_worker[R](
         self,
         ctx: contextvars.Context,
-        fn: Callable[..., Any],
+        fn: Callable[..., R],
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
         release_once: Callable[[], None],
-    ) -> Any:
+    ) -> R:
         self._local.in_tpe = True
         try:
             return ctx.run(fn, *args, **kwargs)
@@ -59,16 +59,20 @@ class TPEProvider:
             self._active_tasks += 1
             return False
 
-    def _submit_to_executor(
+    def _submit_to_executor[**P, R](
         self,
-        fn: Callable[..., Any],
+        fn: Callable[P, R],
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
-    ) -> Future[Any]:
+    ) -> Future[R]:
         ctx = contextvars.copy_context()
         release_once = self._make_release_once()
+
+        def _run() -> R:
+            return self._run_in_worker(ctx, fn, args, kwargs, release_once)
+
         try:
-            future = self._executor.submit(self._run_in_worker, ctx, fn, args, kwargs, release_once)
+            future = self._executor.submit(_run)
         except BaseException:
             release_once()
             raise
@@ -87,13 +91,13 @@ class TPEProvider:
                 local_future.set_result(result)
             return local_future
 
-        return cast(Future[R], self._submit_to_executor(fn, args, kwargs))
+        return self._submit_to_executor(fn, args, kwargs)
 
     def execute[**P, R](self, fn: Callable[P, R], /, *args: P.args, **kwargs: P.kwargs) -> R:
         if self._should_run_locally_or_acquire():
             return fn(*args, **kwargs)
 
-        return cast(Future[R], self._submit_to_executor(fn, args, kwargs)).result()
+        return self._submit_to_executor(fn, args, kwargs).result()
 
     async def execute_async[**P, R](
         self, fn: Callable[P, R], /, *args: P.args, **kwargs: P.kwargs
@@ -101,8 +105,7 @@ class TPEProvider:
         if self._should_run_locally_or_acquire():
             return fn(*args, **kwargs)
 
-        future = cast(Future[R], self._submit_to_executor(fn, args, kwargs))
-        return await asyncio.wrap_future(future)
+        return await asyncio.wrap_future(self._submit_to_executor(fn, args, kwargs))
 
     def shutdown(self, wait: bool = True) -> None:
         with self._lock:

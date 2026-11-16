@@ -36,7 +36,10 @@ def _calibrate_cpu_burn(target_seconds: float = 0.25) -> tuple[int, float]:
 
 @task
 def cpu_task(iters: int) -> int:
-    return _cpu_burn(iters)
+    acc = 0
+    for i in range(iters):
+        acc = (acc * 1664525 + 1013904223 + i) & 0xFFFFFFFF
+    return acc
 
 
 @task
@@ -54,11 +57,11 @@ def test_cpu_tasks_run_in_parallel_by_timing() -> None:
     iters, single_time = _calibrate_cpu_burn(0.25)
 
     async def main() -> tuple[list[int], float]:
-        # Warm up pool threads before timing parallel CPU work.
-        await asyncio.gather(*(apotik(lambda: 0) for _ in range(workers)))
+        # Warm up pool threads/subinterpreters before timing parallel CPU work.
+        await asyncio.gather(*(apotik(cpu_task, 1) for _ in range(workers)))
         t0 = time.perf_counter()
-        results = await asyncio.gather(*(apotik(cpu_task, iters) for _ in range(workers)))
-        return results, time.perf_counter() - t0
+        task_results = await asyncio.gather(*(apotik(cpu_task, iters) for _ in range(workers)))
+        return task_results, time.perf_counter() - t0
 
     results, parallel_time = run(main, workers=workers)
 
@@ -87,8 +90,8 @@ def test_async_cpu_tasks_run_in_parallel_by_timing() -> None:
         # Warm up ATPE worker loops before timing CPU-bound async tasks.
         await asyncio.gather(*(apotik(noop_async) for _ in range(workers)))
         t0 = time.perf_counter()
-        results = await asyncio.gather(*(async_cpu_task(iters) for _ in range(workers)))
-        return results, time.perf_counter() - t0
+        task_results = await asyncio.gather(*(async_cpu_task(iters) for _ in range(workers)))
+        return task_results, time.perf_counter() - t0
 
     results, parallel_time = run(main, workers=workers)
 
@@ -118,14 +121,14 @@ def test_atpe_least_loaded_avoids_blocked_worker() -> None:
             await asyncio.sleep(0.005)
 
         t0 = time.perf_counter()
-        fast_results: list[int] = []
+        fast_out: list[int] = []
         for i in range(5):
-            fast_results.append(await apotik(fast_async, i))
-        fast_elapsed = time.perf_counter() - t0
+            fast_out.append(await apotik(fast_async, i))
+        elapsed = time.perf_counter() - t0
 
         release.set()
-        slow_result = await slow_task
-        return fast_results, fast_elapsed, slow_result
+        slow_out = await slow_task
+        return fast_out, elapsed, slow_out
 
     fast_results, fast_elapsed, slow_result = run(main, workers=2)
     assert fast_results == [0, 2, 4, 6, 8]

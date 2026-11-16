@@ -94,15 +94,7 @@ def _get_runtime() -> _Runtime | None:
 
 
 @overload
-def run[R](main: Coroutine[Any, Any, R], *, workers: int | None = None) -> R: ...
-
-
-@overload
 def run[R](main: Awaitable[R], *, workers: int | None = None) -> R: ...
-
-
-@overload
-def run[R](main: Callable[[], Coroutine[Any, Any, R]], *, workers: int | None = None) -> R: ...
 
 
 @overload
@@ -114,7 +106,7 @@ def run[R](main: Callable[[], R], *, workers: int | None = None) -> R: ...
 
 
 def run[R](
-    main: Coroutine[Any, Any, R] | Awaitable[R] | Callable[[], Any],
+    main: Awaitable[R] | Callable[[], Any],
     *,
     workers: int | None = None,
 ) -> Any:
@@ -127,12 +119,7 @@ def run[R](
             main.close()
         raise ValueError("workers must be >= 1")
 
-    is_coro = inspect.iscoroutine(main)
-    is_awaitable = inspect.isawaitable(main)
-    is_coro_fn = inspect.iscoroutinefunction(main)
-    is_callable = callable(main)
-
-    if not (is_coro or is_awaitable or is_callable):
+    if not (inspect.isawaitable(main) or callable(main)):
         raise TypeError(f"run() expected a callable or coroutine, got {type(main).__name__}")
 
     runtime = _Runtime(resolved_workers)
@@ -140,17 +127,19 @@ def run[R](
     _global_runtime = runtime
     token = _runtime_var.set(runtime)
     try:
-        if is_coro:
+        if inspect.iscoroutine(main):
             return asyncio.run(main)
-        if is_coro_fn:
+        if inspect.iscoroutinefunction(main):
             return asyncio.run(main())
-        if is_awaitable:
+        if inspect.isawaitable(main):
 
             async def _await_main() -> Any:
                 return await main
 
             return asyncio.run(_await_main())
-        return main()
+        if callable(main):
+            return main()
+        raise TypeError(f"run() expected a callable or coroutine, got {type(main).__name__}")
     finally:
         _runtime_var.reset(token)
         _global_runtime = prev_global

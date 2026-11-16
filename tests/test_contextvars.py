@@ -1,5 +1,8 @@
 import asyncio
+import sys
 from contextvars import ContextVar
+
+import pytest
 
 from potiklib import apotik, potik, run, task
 
@@ -21,7 +24,7 @@ async def read_and_mutate_async(new_val: str) -> str:
     return seen
 
 
-def test_contextvars_propagated_and_isolated() -> None:
+def test_contextvars_propagated_and_isolated_async() -> None:
     async def main() -> None:
         token = request_id_var.set("req-123")
         try:
@@ -36,7 +39,18 @@ def test_contextvars_propagated_and_isolated() -> None:
 
             assert await apotik(via_coro()) == "req-123"
             assert request_id_var.get() == "req-123"
+        finally:
+            request_id_var.reset(token)
 
+    run(main, workers=2)
+
+
+def test_contextvars_propagated_and_isolated_sync(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "_is_gil_enabled", lambda: False)
+
+    async def main() -> None:
+        token = request_id_var.set("req-123")
+        try:
             assert read_and_mutate_sync("mutated-sync") == "req-123"
             assert request_id_var.get() == "req-123"
 

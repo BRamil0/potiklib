@@ -1,10 +1,15 @@
 import asyncio
+import sys
 import threading
+
+import pytest
 
 from potiklib import apotik, potik, run, task
 
 
-def test_nested_sync_calls_single_worker_no_deadlock() -> None:
+def test_nested_sync_calls_single_worker_no_deadlock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "_is_gil_enabled", lambda: False)
+
     @task
     def leaf(x: int) -> tuple[int, int]:
         return x * 2, threading.get_ident()
@@ -31,7 +36,11 @@ def test_nested_sync_calls_single_worker_no_deadlock() -> None:
     run(main, workers=1)
 
 
-def test_nested_sync_calls_with_free_worker_and_full_pool() -> None:
+def test_nested_sync_calls_with_free_worker_and_full_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "_is_gil_enabled", lambda: False)
+
     @task
     def inner(x: int) -> tuple[int, int]:
         return x + 1, threading.get_ident()
@@ -50,7 +59,10 @@ def test_nested_sync_calls_with_free_worker_and_full_pool() -> None:
     run(main, workers=2)
 
 
-def test_nested_sync_calls_when_all_workers_busy_no_deadlock() -> None:
+def test_nested_sync_calls_when_all_workers_busy_no_deadlock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "_is_gil_enabled", lambda: False)
     barrier_before = threading.Barrier(2, timeout=2.0)
     barrier_after = threading.Barrier(2, timeout=2.0)
 
@@ -99,7 +111,9 @@ def test_nested_async_calls_single_worker_no_deadlock() -> None:
     run(main, workers=1)
 
 
-def test_cross_pool_sync_async_nesting_no_deadlock() -> None:
+def test_cross_pool_sync_async_nesting_no_deadlock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "_is_gil_enabled", lambda: False)
+
     @task
     async def async_leaf(x: int) -> int:
         await asyncio.sleep(0)

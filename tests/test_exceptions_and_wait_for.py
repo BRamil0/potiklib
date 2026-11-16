@@ -1,4 +1,5 @@
 import asyncio
+import sys
 import threading
 import time
 
@@ -14,7 +15,7 @@ class CustomTaskError(Exception):
 
 @task
 def fail_sync(msg: str) -> None:
-    raise CustomTaskError(msg)
+    raise ValueError(msg)
 
 
 @task
@@ -29,12 +30,20 @@ async def slow_async_task(delay: float) -> str:
     return "done"
 
 
+@task
+def slow_ipe_sleep(delay: float) -> str:
+    import time
+
+    time.sleep(delay)
+    return "finished"
+
+
 def test_exception_propagation_across_all_apis() -> None:
     async def main() -> None:
-        with pytest.raises(CustomTaskError, match="sync-task"):
+        with pytest.raises(ValueError, match="sync-task"):
             fail_sync("sync-task")
 
-        with pytest.raises(CustomTaskError, match="potik-call"):
+        with pytest.raises(ValueError, match="potik-call"):
             potik(fail_sync, "potik-call")
 
         with pytest.raises(CustomTaskError, match="async-task"):
@@ -46,7 +55,7 @@ def test_exception_propagation_across_all_apis() -> None:
         with pytest.raises(CustomTaskError, match="apotik-coro"):
             await apotik(fail_async("apotik-coro"))
 
-        with pytest.raises(CustomTaskError, match="apotik-sync-fn"):
+        with pytest.raises(ValueError, match="apotik-sync-fn"):
             await apotik(fail_sync, "apotik-sync-fn")
 
     run(main, workers=2)
@@ -88,7 +97,8 @@ def test_asyncio_wait_for_cancels_atpe_task_without_hanging_shutdown() -> None:
     assert elapsed < 0.8
 
 
-def test_asyncio_wait_for_on_sync_apotik() -> None:
+def test_asyncio_wait_for_on_sync_apotik(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "_is_gil_enabled", lambda: False)
     release = threading.Event()
 
     def slow_sync() -> str:
@@ -106,3 +116,16 @@ def test_asyncio_wait_for_on_sync_apotik() -> None:
     run(main, workers=1)
     elapsed = time.perf_counter() - start
     assert elapsed < 1.0
+
+
+def test_asyncio_wait_for_on_ipe_apotik(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "_is_gil_enabled", lambda: True)
+
+    async def main() -> None:
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(apotik(slow_ipe_sleep, 0.25), timeout=0.04)
+
+    start = time.perf_counter()
+    run(main, workers=1)
+    elapsed = time.perf_counter() - start
+    assert elapsed < 1.5

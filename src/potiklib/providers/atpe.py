@@ -121,6 +121,7 @@ class ATPEProvider:
             coro.close()
             raise RuntimeError("Worker event loop is not initialized")
 
+        worker_loop: asyncio.AbstractEventLoop = loop
         cf_future: Future[R] = Future()
         task_holder: list[asyncio.Task[R] | None] = [None]
 
@@ -143,7 +144,7 @@ class ATPEProvider:
                 self._release_worker(worker)
                 return
             try:
-                task = loop.create_task(coro)
+                task = worker_loop.create_task(coro)
             except BaseException as exc:
                 coro.close()
                 if not cf_future.done():
@@ -164,14 +165,14 @@ class ATPEProvider:
         def _on_cf_done(fut: Future[R]) -> None:
             if fut.cancelled():
                 try:
-                    loop.call_soon_threadsafe(_cancel_worker_task)
+                    worker_loop.call_soon_threadsafe(_cancel_worker_task)
                 except RuntimeError:
                     pass
 
         cf_future.add_done_callback(_on_cf_done)
 
         try:
-            loop.call_soon_threadsafe(ctx.run, _create_task_and_link)
+            worker_loop.call_soon_threadsafe(ctx.run, _create_task_and_link)
         except BaseException:
             coro.close()
             self._release_worker(worker)
