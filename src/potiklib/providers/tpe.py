@@ -1,14 +1,9 @@
-from __future__ import annotations
-
 import asyncio
 import contextvars
 import threading
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any, ParamSpec, TypeVar, cast
-
-P = ParamSpec("P")
-R = TypeVar("R")
+from typing import Any, cast
 
 
 class TPEProvider:
@@ -81,7 +76,7 @@ class TPEProvider:
         future.add_done_callback(lambda _fut: release_once())
         return future
 
-    def submit(self, fn: Callable[P, R], /, *args: P.args, **kwargs: P.kwargs) -> Future[R]:
+    def submit[**P, R](self, fn: Callable[P, R], /, *args: P.args, **kwargs: P.kwargs) -> Future[R]:
         if self._should_run_locally_or_acquire():
             local_future: Future[R] = Future()
             try:
@@ -94,13 +89,15 @@ class TPEProvider:
 
         return cast(Future[R], self._submit_to_executor(fn, args, kwargs))
 
-    def execute(self, fn: Callable[P, R], /, *args: P.args, **kwargs: P.kwargs) -> R:
+    def execute[**P, R](self, fn: Callable[P, R], /, *args: P.args, **kwargs: P.kwargs) -> R:
         if self._should_run_locally_or_acquire():
             return fn(*args, **kwargs)
 
         return cast(Future[R], self._submit_to_executor(fn, args, kwargs)).result()
 
-    async def execute_async(self, fn: Callable[P, R], /, *args: P.args, **kwargs: P.kwargs) -> R:
+    async def execute_async[**P, R](
+        self, fn: Callable[P, R], /, *args: P.args, **kwargs: P.kwargs
+    ) -> R:
         if self._should_run_locally_or_acquire():
             return fn(*args, **kwargs)
 

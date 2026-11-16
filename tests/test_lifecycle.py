@@ -5,7 +5,7 @@ import threading
 import pytest
 
 import potiklib
-from potiklib import _main, potik, run, task
+from potiklib import potik, run, task
 from potiklib.providers.atpe import ATPEProvider
 from potiklib.providers.ipe import IPEProvider
 from potiklib.providers.tpe import TPEProvider
@@ -81,7 +81,7 @@ def test_lazy_initialization_and_selective_shutdown(monkeypatch: pytest.MonkeyPa
     assert shutdown_calls == []
 
     # 2. Only sync task called -> only TPE initialized & shut down (on free-threaded build)
-    monkeypatch.setattr(_main, "_is_gil_enabled", lambda: False)
+    monkeypatch.setattr(sys, "_is_gil_enabled", lambda: False)
     created.clear()
     shutdown_calls.clear()
 
@@ -119,17 +119,16 @@ def test_lazy_initialization_and_selective_shutdown(monkeypatch: pytest.MonkeyPa
     assert shutdown_calls == [("atpe", True)]
 
     # 4. GIL enabled -> only IPE initialized & shut down for sync tasks
-    if hasattr(sys, "_is_gil_enabled"):
-        monkeypatch.setattr(_main, "_is_gil_enabled", lambda: True)
-        created.clear()
-        shutdown_calls.clear()
+    monkeypatch.setattr(sys, "_is_gil_enabled", lambda: True)
+    created.clear()
+    shutdown_calls.clear()
 
-        def only_ipe() -> int:
-            return potik(int, -99)
+    def only_ipe() -> int:
+        return potik(int, -99)
 
-        assert run(only_ipe, workers=2) == -99
-        assert created == ["ipe"]
-        assert shutdown_calls == [("ipe", True)]
+    assert run(only_ipe, workers=2) == -99
+    assert created == ["ipe"]
+    assert shutdown_calls == [("ipe", True)]
 
 
 def test_default_workers_uses_process_cpu_count(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -141,7 +140,7 @@ def test_default_workers_uses_process_cpu_count(monkeypatch: pytest.MonkeyPatch)
         orig_tpe_init(self, workers)
 
     monkeypatch.setattr(TPEProvider, "__init__", spy_tpe_init)
-    monkeypatch.setattr(_main, "_is_gil_enabled", lambda: False)
+    monkeypatch.setattr(sys, "_is_gil_enabled", lambda: False)
     monkeypatch.setattr(potiklib._main.os, "process_cpu_count", lambda: 3)
 
     assert run(lambda: potik(lambda: 1)) == 1

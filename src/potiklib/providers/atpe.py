@@ -1,15 +1,10 @@
-from __future__ import annotations
-
 import asyncio
 import contextvars
 import inspect
 import threading
 from collections.abc import Awaitable, Callable, Coroutine
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import Any, ParamSpec, TypeVar
-
-P = ParamSpec("P")
-R = TypeVar("R")
+from typing import Any
 
 
 class _WorkerState:
@@ -87,7 +82,7 @@ class ATPEProvider:
             if self._total_in_flight == 0:
                 self._idle_cond.notify_all()
 
-    async def execute_awaitable(self, awaitable: Awaitable[R], /) -> R:
+    async def execute_awaitable[R](self, awaitable: Awaitable[R], /) -> R:
         if getattr(self._local, "in_atpe", False):
             return await awaitable
 
@@ -102,7 +97,7 @@ class ATPEProvider:
 
         return await self._dispatch_coro(coro)
 
-    async def execute_callable(
+    async def execute_callable[**P, R](
         self,
         fn: Callable[P, Coroutine[Any, Any, R] | Awaitable[R]],
         /,
@@ -117,7 +112,7 @@ class ATPEProvider:
 
         return await self._dispatch_coro(_invoke())
 
-    async def _dispatch_coro(self, coro: Coroutine[Any, Any, R]) -> R:
+    async def _dispatch_coro[R](self, coro: Coroutine[Any, Any, R]) -> R:
         ctx = contextvars.copy_context()
         worker = self._acquire_worker()
         loop = worker.loop

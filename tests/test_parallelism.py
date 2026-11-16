@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sys
 import threading
 import time
 
@@ -38,6 +39,12 @@ def cpu_task(iters: int) -> int:
     return _cpu_burn(iters)
 
 
+@task
+async def async_cpu_task(iters: int) -> int:
+    await asyncio.sleep(0)
+    return _cpu_burn(iters)
+
+
 def test_cpu_tasks_run_in_parallel_by_timing() -> None:
     cpu_count = os.process_cpu_count() or 1
     if cpu_count < 2:
@@ -58,6 +65,36 @@ def test_cpu_tasks_run_in_parallel_by_timing() -> None:
     expected = _cpu_burn(iters)
     assert results == [expected] * workers
     # Parallel execution across `workers` threads should be much faster than sequential.
+    assert parallel_time < single_time * workers * 0.7
+
+
+def test_async_cpu_tasks_run_in_parallel_by_timing() -> None:
+    if sys._is_gil_enabled():
+        pytest.skip("ATPE CPU parallelism requires free-threaded Python")
+
+    cpu_count = os.process_cpu_count() or 1
+    if cpu_count < 2:
+        pytest.skip("Need at least 2 CPUs to verify parallel CPU speedup")
+
+    workers = min(4, cpu_count)
+    iters, single_time = _calibrate_cpu_burn(0.25)
+
+    async def noop_async() -> int:
+        await asyncio.sleep(0)
+        return 0
+
+    async def main() -> tuple[list[int], float]:
+        # Warm up ATPE worker loops before timing CPU-bound async tasks.
+        await asyncio.gather(*(apotik(noop_async) for _ in range(workers)))
+        t0 = time.perf_counter()
+        results = await asyncio.gather(*(async_cpu_task(iters) for _ in range(workers)))
+        return results, time.perf_counter() - t0
+
+    results, parallel_time = run(main, workers=workers)
+
+    expected = _cpu_burn(iters)
+    assert results == [expected] * workers
+    # CPU-heavy @task async def tasks execute in parallel across ATPE worker threads.
     assert parallel_time < single_time * workers * 0.7
 
 

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import asyncio
 import functools
 import inspect
@@ -8,22 +6,12 @@ import sys
 import threading
 from collections.abc import Awaitable, Callable, Coroutine
 from contextvars import ContextVar
-from typing import Any, ParamSpec, TypeVar, overload
+from typing import Any, overload
 
 from potiklib.providers.atpe import ATPEProvider
 from potiklib.providers.base import SyncProvider
 from potiklib.providers.ipe import IPEProvider
 from potiklib.providers.tpe import TPEProvider
-
-P = ParamSpec("P")
-R = TypeVar("R")
-
-
-def _is_gil_enabled() -> bool:
-    checker = getattr(sys, "_is_gil_enabled", None)
-    if checker is None:
-        return True
-    return bool(checker())
 
 
 class _Runtime:
@@ -62,7 +50,7 @@ class _Runtime:
             return self._ipe
 
     def get_sync_provider(self) -> SyncProvider:
-        if _is_gil_enabled():
+        if sys._is_gil_enabled():
             return self.get_ipe()
         return self.get_tpe()
 
@@ -106,26 +94,26 @@ def _get_runtime() -> _Runtime | None:
 
 
 @overload
-def run(main: Coroutine[Any, Any, R], *, workers: int | None = None) -> R: ...
+def run[R](main: Coroutine[Any, Any, R], *, workers: int | None = None) -> R: ...
 
 
 @overload
-def run(main: Awaitable[R], *, workers: int | None = None) -> R: ...
+def run[R](main: Awaitable[R], *, workers: int | None = None) -> R: ...
 
 
 @overload
-def run(main: Callable[[], Coroutine[Any, Any, R]], *, workers: int | None = None) -> R: ...
+def run[R](main: Callable[[], Coroutine[Any, Any, R]], *, workers: int | None = None) -> R: ...
 
 
 @overload
-def run(main: Callable[[], Awaitable[R]], *, workers: int | None = None) -> R: ...
+def run[R](main: Callable[[], Awaitable[R]], *, workers: int | None = None) -> R: ...
 
 
 @overload
-def run(main: Callable[[], R], *, workers: int | None = None) -> R: ...
+def run[R](main: Callable[[], R], *, workers: int | None = None) -> R: ...
 
 
-def run(
+def run[R](
     main: Coroutine[Any, Any, R] | Awaitable[R] | Callable[[], Any],
     *,
     workers: int | None = None,
@@ -169,7 +157,7 @@ def run(
         runtime.shutdown()
 
 
-def potik(fn: Callable[P, R], /, *args: P.args, **kwargs: P.kwargs) -> R:
+def potik[**P, R](fn: Callable[P, R], /, *args: P.args, **kwargs: P.kwargs) -> R:
     """Execute a synchronous callable in the sync worker pool, or locally outside run()."""
     if getattr(fn, "_potik_task", False):
         fn = getattr(fn, "__wrapped__", fn)
@@ -181,15 +169,17 @@ def potik(fn: Callable[P, R], /, *args: P.args, **kwargs: P.kwargs) -> R:
 
 
 @overload
-async def apotik(target: Awaitable[R], /) -> R: ...
+async def apotik[R](target: Awaitable[R], /) -> R: ...
 
 
 @overload
-async def apotik(target: Callable[P, Awaitable[R]], /, *args: P.args, **kwargs: P.kwargs) -> R: ...
+async def apotik[**P, R](
+    target: Callable[P, Awaitable[R]], /, *args: P.args, **kwargs: P.kwargs
+) -> R: ...
 
 
 @overload
-async def apotik(target: Callable[P, R], /, *args: P.args, **kwargs: P.kwargs) -> R: ...
+async def apotik[**P, R](target: Callable[P, R], /, *args: P.args, **kwargs: P.kwargs) -> R: ...
 
 
 async def apotik(target: Any, /, *args: Any, **kwargs: Any) -> Any:
@@ -223,14 +213,16 @@ async def apotik(target: Any, /, *args: Any, **kwargs: Any) -> Any:
 
 
 @overload
-def task(fn: Callable[P, Coroutine[Any, Any, R]], /) -> Callable[P, Coroutine[Any, Any, R]]: ...
+def task[**P, R](
+    fn: Callable[P, Coroutine[Any, Any, R]], /
+) -> Callable[P, Coroutine[Any, Any, R]]: ...
 
 
 @overload
-def task(fn: Callable[P, R], /) -> Callable[P, R]: ...
+def task[**P, R](fn: Callable[P, R], /) -> Callable[P, R]: ...
 
 
-def task(fn: Callable[P, Any], /) -> Callable[P, Any]:
+def task[**P](fn: Callable[P, Any], /) -> Callable[P, Any]:
     """Decorate a sync or async function to run automatically via potiklib workers inside run()."""
     if inspect.iscoroutinefunction(fn):
 

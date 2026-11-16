@@ -1,20 +1,37 @@
 import asyncio
+import concurrent.interpreters
+import functools
 import sys
 
 import pytest
 
-from potiklib import _main, apotik, potik, run, task
+from potiklib import apotik, potik, run, task
 from potiklib.providers.ipe import IPEProvider
 
 
 @task
-def ipe_square(x: int) -> int:
-    return x * x
+def ipe_square(x: int) -> tuple[int, int]:
+    import concurrent.interpreters
+
+    return x * x, concurrent.interpreters.get_current().id
 
 
 @task
 def ipe_fail(msg: str) -> int:
     raise ValueError(msg)
+
+
+def _user_decorator(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
+@_user_decorator
+def user_decorated(x: int) -> int:
+    return x + 1
 
 
 class CustomAwaitable:
@@ -29,29 +46,60 @@ class CustomAwaitable:
         return _inner().__await__()
 
 
-def test_ipe_provider_with_wrapped_task_function() -> None:
+def test_ipe_provider_with_wrapped_task_function(monkeypatch: pytest.MonkeyPatch) -> None:
+    main_interp_id = concurrent.interpreters.get_current().id
     provider = IPEProvider(workers=2)
+    submitted_targets: list[object] = []
+    orig_submit = provider._executor.submit
+
+    def spy_submit(fn, /, *args, **kwargs):
+        submitted_targets.append(fn)
+        return orig_submit(fn, *args, **kwargs)
+
+    monkeypatch.setattr(provider._executor, "submit", spy_submit)
     try:
-        assert provider.execute(ipe_square, 9) == 81
+        res, interp_id = provider.execute(ipe_square, 9)
+        assert res == 81
+        assert interp_id != main_interp_id
+        assert submitted_targets[-1] is getattr(ipe_square, "__wrapped__")
+
         with pytest.raises(ValueError, match="ipe-error"):
             provider.execute(ipe_fail, "ipe-error")
+
+        # User decorators without _potik_task are not silently unwrapped.
+        try:
+            provider.execute(user_decorated, 1)
+        except concurrent.interpreters.NotShareableError:
+            pass
+        assert submitted_targets[-1] is user_decorated
+
+        # A closure is never cross-interpreter shareable regardless of PYTHONPATH.
+        offset = 1
+
+        def local_closure(x: int) -> int:
+            return x + offset
+
+        with pytest.raises(concurrent.interpreters.NotShareableError):
+            provider.execute(local_closure, 1)
     finally:
         provider.shutdown(wait=True)
 
 
 def test_gil_enabled_routes_sync_tasks_to_ipe(monkeypatch: pytest.MonkeyPatch) -> None:
-    if not hasattr(sys, "_is_gil_enabled"):
-        pytest.skip("sys._is_gil_enabled not present")
+    main_interp_id = concurrent.interpreters.get_current().id
+    monkeypatch.setattr(sys, "_is_gil_enabled", lambda: True)
 
-    monkeypatch.setattr(_main, "_is_gil_enabled", lambda: True)
-
-    async def main() -> tuple[int, int, int]:
+    async def main() -> tuple[tuple[int, int], tuple[int, int], tuple[int, int]]:
         r1 = ipe_square(5)
         r2 = potik(ipe_square, 6)
         r3 = await apotik(ipe_square, 7)
         return r1, r2, r3
 
-    assert run(main, workers=2) == (25, 36, 49)
+    (v1, id1), (v2, id2), (v3, id3) = run(main, workers=2)
+    assert (v1, v2, v3) == (25, 36, 49)
+    assert id1 != main_interp_id
+    assert id2 != main_interp_id
+    assert id3 != main_interp_id
 
 
 def test_typing_overloads_and_inference() -> None:
